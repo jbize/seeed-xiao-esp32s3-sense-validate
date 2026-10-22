@@ -1,8 +1,8 @@
-# Seeed Studio XIAO ESP32S3 Sense — picture transfer rate check
+# Seeed Studio XIAO ESP32S3 Sense — picture transfer and radio performance
 
-This checks one Sense board. It takes a fixed picture, sends that picture over Wi-Fi for 10 seconds, and prints a report that ends in `GOOD`, `BAD`, or `UNCLEAR`.
+This repository has two checks for one Sense board. The picture transfer check takes a fixed picture, sends it over Wi-Fi for 10 seconds, and times the sensor, the copy, and the Wi-Fi send. The radio performance test leaves the camera module unplugged and times only the Wi-Fi send. Each report ends in `GOOD`, `BAD`, or `UNCLEAR`.
 
-I had purchased a batch of Sense boards for a security camera project and could not understand why my results were so poor.  I had assumed it was my own sketch code, but eventually determined the issue to be hardware. Several of these boards were too slow to use. A good board delivers about 30 JPEGs a second at this picture. The slow ones managed about 2 to 4, and one of them took hundreds of milliseconds to send a single JPEG. The picture itself was fine: the OV3660 produced a real 1024×768 JPEG, the signal was strong, and the same slowness showed up in Seeed's own camera sketch. That made the fault hard to place. It was not the sensor, and it was not a loose antenna in any obvious way.
+I had purchased a batch of Sense boards for a security camera project and could not understand why my results were so poor. I had assumed it was my own sketch code, but eventually determined the issue to be hardware. Several of these boards were too slow to use. A good board delivers about 30 JPEGs a second at this picture. The slow ones managed about 2 to 4, and one of them took hundreds of milliseconds to send a single JPEG. The picture itself was fine: the OV3660 produced a real 1024×768 JPEG, the signal was strong, and the same slowness showed up in Seeed's own camera sketch. That made the fault hard to place. It was not the sensor, and it was not a loose antenna in any obvious way.
 
 This test times the three places a JPEG can stall.
 
@@ -10,7 +10,7 @@ This test times the three places a JPEG can stall.
 2. The copy from that picture memory into the ESP32-S3's internal memory.
 3. The Wi-Fi send of that internal copy out the antenna.
 
-On the slow boards, the first two steps were quick. The Wi-Fi send was the slow one, so the report names the radio path: the Wi-Fi block in the ESP32-S3, or the antenna parts on the Sense board. The timer cannot split those two. A different board can still fail at the sensor or at the copy, and the report names that part instead.
+On the slow boards, the first two steps were quick. The Wi-Fi send was the slow one, so the report names the radio path: the Wi-Fi block in the ESP32-S3, or the antenna parts on the Sense board. The timer cannot split those two. A different board can still fail at the sensor or at the copy, and the report names that part instead. The radio performance test is that third step on its own, with the camera module unplugged.
 
 The picture is the one already used to compare these boards: a 21 MHz clock, XGA, JPEG quality 30, brightness 1, saturation -2, mirror off, flip on, and night exposure off. XGA here is 1024×768. The program reads that size from the JPEG itself.
 
@@ -69,7 +69,7 @@ A JPEG that is not 1024×768 is `BAD` as well. That run does not name a part, be
 
 The sensor and copy lines are the middle picture of the run. One odd picture does not move them. The Wi-Fi line is different, because a stall is the fault these boards showed. Fastest is the quickest send, average is the send time across the whole run and the number the verdict uses, and slowest is the worst send.
 
-## Run it
+## Run the picture test
 
 Copy the example and set the Wi-Fi name and password:
 
@@ -91,11 +91,52 @@ Ten seconds is the default. `--seconds 30` keeps the same picture and reads the 
 python3 -m unittest discover
 ```
 
-That checks the parser and the report without a board.
+That checks both reports without a board.
+
+## Radio performance test
+
+Unplug the camera module first. This sketch is separate from the picture test. It never starts the camera, and it does not use picture memory. It puts one 20 KB buffer in the ESP32-S3's internal memory, the SRAM the Wi-Fi block can transmit from, and sends that same buffer for 10 seconds. The timer covers only that write. 20 KB is about the size of the JPEGs in the picture test, so the send times can be compared.
+
+Both sketches use `include/secrets.h`. Flash this one by name, then run its report from this directory. The program restarts the board on USB, waits until it prints its address, and is the only client.
+
+```
+pio run -e radio_performance -t upload
+python3 radio_performance.py
+python3 radio_performance.py --seconds 30
+```
+
+Ten seconds is the default. Pass `--url http://192.168.1.95` to skip the restart and talk to a board that is already up. The exit codes are the same as the picture test.
+
+`GOOD` means the average send was 50 ms or less across the whole run. `BAD` means the average was 80 ms or more, and the report names the ESP32-S3 Wi-Fi block or the antenna parts on the Sense board. A run with no completed send, or a connection that closes early, is `BAD` as well. `UNCLEAR` is the gap, an average between 50 ms and 80 ms.
+
+The verdict uses the average. Fastest is the quickest send, and it shows that the radio can still get one buffer out quickly. Slowest is the worst stall. One slow send does not decide the result by itself.
+
+This is a board that had already failed the picture test on the Wi-Fi send. With the camera module removed, the radio performance test failed the same way. The signal was strong, a few sends were quick, and the average was still about half a second.
+
+```
+Seeed Studio XIAO ESP32S3 Sense — radio performance
+
+Board: 44:BD:8D:EC:C0:84
+Signal: -42 dBm
+
+Send
+  Payload: 20.0 KB, from internal memory
+  The camera module is not used.
+
+Transfer, 10.0 seconds, one client
+  Sends: 17
+  Rate: 1.7 sends/second
+  Throughput: 0.03 MB/s
+  Wi-Fi: 16.2 ms fastest, 542.3 ms average, 3332.9 ms slowest
+    The ESP32-S3 Wi-Fi block sent that buffer out the antenna.
+
+Result: BAD — ESP32-S3 Wi-Fi or the antenna parts on the Sense board
+  The Wi-Fi send was 542.3 ms. The signal was -42 dBm. The buffer was already in internal memory, and the camera module was not used.
+```
 
 ## Before a board goes back
 
-The Wi-Fi password is compiled into the flashed image. Erase the whole chip before that board goes back in a package. The microSD card is not part of the chip erase.
+The Wi-Fi password is compiled into whichever sketch was flashed. Erase the whole chip before that board goes back in a package. The microSD card is not part of the chip erase.
 
 ```
 esptool.py --chip esp32s3 --port /dev/ttyACM0 erase_flash
